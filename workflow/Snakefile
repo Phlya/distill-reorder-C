@@ -1,4 +1,82 @@
-# Main entrypoint of the workflow. 
-# Please follow the best practices: 
-# https://snakemake.readthedocs.io/en/stable/snakefiles/best_practices.html,
-# in particular regarding the standardized folder structure mentioned there. 
+from snakemake.utils import min_version
+
+min_version("6.0")
+
+
+include: "rules/common.smk"
+
+
+LIBRARY_RUN_FASTQS = organize_fastqs(config)
+
+rearranged_coolers_library_folder = config["rearrange"][
+    "rearranged_coolers_library_folder"
+]
+rearranged_coolers_library_group_folder = config["rearrange"][
+    "rearranged_coolers_library_group_folder"
+]
+rearranged_library_coolers = expand(
+    f"{rearranged_coolers_library_folder}/{{library}}.{config['rearrange']['new_assembly_name']}.{{filter_name}}.{min(config['bin']['resolutions'])}.{{ext}}",
+    library=LIBRARY_RUN_FASTQS.keys(),
+    filter_name=list(config["bin"]["filters"].keys()),
+    ext=["cool", "mcool"],
+)
+
+
+rule default:
+    input:
+        rearranged_library_coolers,
+
+
+module distiller:
+    snakefile:
+        github("open2c/distiller-sm", path="workflow/Snakefile", branch="master")
+        # "/tungstenfs/scratch/ggiorget/ilya/seq_data/microC/distiller-sm/workflow/Snakefile"
+    config:
+        config
+
+
+use rule * from distiller as distiller_*
+
+
+rule rearrange_cooler:
+    input:
+        cool=f"{distiller.coolers_library_folder}/{{library}}.{distiller.assembly}.{{filter_name}}.{{min_resolution}}.cool",
+        view=lambda wildcards: config["rearrange"]["views"][wildcards.library],
+    params:
+        chunksize=config["rearrange"]["chunksize"],
+        new_assembly_name=config["rearrange"]["new_assembly_name"],
+    conda:
+        "envs/rearrange.yml"
+    log:
+        "logs/rearrange/{library}.{filter_name}.{min_resolution}.log",
+    benchmark:
+        "benchmarks/rearrange/{library}.{filter_name}.{min_resolution}.tsv"
+    output:
+        cool=f"{rearranged_coolers_library_folder}/{{library}}.{config['rearrange']['new_assembly_name']}.{{filter_name}}.{{min_resolution}}.cool",
+    shell:
+        """
+        cooltools rearrange {input.cool} {output.cool} --view {input.cool} \
+        --chunksize {params.chunksize} --assembly {params.new_assembly_name}
+        """
+
+
+use rule zoom_library from distiller as zoom_library_rearranged with:
+    input:
+        cool=f"{rearranged_coolers_library_folder}/{{library}}.{config['rearrange']['new_assembly_name']}.{{filter_name}}.{{min_resolution}}.cool",
+    log:
+        "logs/zoom_library_rearranged/{library}.{filter_name}.{min_resolution}.log",
+    benchmark:
+        "benchmarks/zoom_library_rearranged/{library}.{filter_name}.{min_resolution}.tsv"
+    output:
+        mcool=f"{rearranged_coolers_library_folder}/{{library}}.{config['rearrange']['new_assembly_name']}.{{filter_name}}.{{min_resolution}}.mcool",
+
+
+use rule merge_zoom_library_group_coolers from distiller as merge_zoom_library_group_coolers_rearranged with:
+    input:
+        cool=f"{rearranged_coolers_library_group_folder}/{{library_group}}.{config['rearrange']['new_assembly_name']}.{{filter_name}}.{{min_resolution}}.cool",
+    log:
+        "logs/merge_zoom_library_group_coolers_rearranged/{library_group}.{filter_name}.{min_resolution}.log",
+    benchmark:
+        "benchmarks/merge_zoom_library_group_coolers_rearranged/{library_group}.{filter_name}.{min_resolution}.tsv"
+    output:
+        mcool=f"{rearranged_coolers_library_group_folder}/{{library_group}}.{config['rearrange']['new_assembly_name']}.{{filter_name}}.{{min_resolution}}.mcool",

@@ -1,0 +1,10 @@
+name: rearrange
+channels:
+  - bioconda
+  - defaults
+  - conda-forge
+dependencies:
+  - python>=3.8
+  - pip
+  - pip:
+    - https://github.com/open2c/cooltools/archive/refs/heads/rearrange_cooler.zip
