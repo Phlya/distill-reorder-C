@@ -30,7 +30,6 @@ rule default:
 module distiller:
     snakefile:
         github("open2c/distiller-sm", path="workflow/Snakefile", branch="master")
-        # "/tungstenfs/scratch/ggiorget/ilya/seq_data/microC/distiller-sm/workflow/Snakefile"
     config:
         config
 
@@ -55,7 +54,7 @@ rule rearrange_cooler:
         cool=f"{rearranged_coolers_library_folder}/{{library}}.{config['rearrange']['new_assembly_name']}.{{filter_name}}.{{min_resolution}}.cool",
     shell:
         """
-        cooltools rearrange {input.cool} {output.cool} --view {input.cool} \
+        cooltools rearrange {input.cool} {output.cool} --view {input.view} \
         --chunksize {params.chunksize} --assembly {params.new_assembly_name}
         """
 
