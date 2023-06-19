@@ -15,16 +15,27 @@ rearranged_coolers_library_group_folder = config["rearrange"][
     "rearranged_coolers_library_group_folder"
 ]
 rearranged_library_coolers = expand(
-    f"{rearranged_coolers_library_folder}/{{library}}.{config['rearrange']['new_assembly_name']}.{{filter_name}}.{min(config['bin']['resolutions'])}.{{ext}}",
+    f"{rearranged_coolers_library_folder}/{{library}}.{config['rearrange']['new_assembly_name']}.{{filter_name}}.{min(config['bin']['resolutions'])}.mcool",
     library=LIBRARY_RUN_FASTQS.keys(),
     filter_name=list(config["bin"]["filters"].keys()),
-    ext=["cool", "mcool"],
+)
+rearranged_library_coolers_balanced = expand(
+    f"{rearranged_coolers_library_folder}/{{library}}.{config['rearrange']['new_assembly_name']}.{{filter_name}}.{min(config['bin']['resolutions'])}.mcool.{{resolution}}.check",
+    library=LIBRARY_RUN_FASTQS.keys(),
+    filter_name=list(config["bin"]["filters"].keys()),
+    resolution=config["bin"]["resolutions"],
+)
+resgen_uploads = (
+    [f"{clr}_uploaded" for clr in rearranged_library_coolers]
+    if config["resgen"]["upload"]
+    else []
 )
 
 
 rule default:
     input:
         rearranged_library_coolers,
+        resgen_uploads,
 
 
 module distiller:
@@ -39,43 +50,44 @@ use rule * from distiller as distiller_*
 
 rule rearrange_cooler:
     input:
-        cool=f"{distiller.coolers_library_folder}/{{library}}.{distiller.assembly}.{{filter_name}}.{{min_resolution}}.cool",
+        mcool=f"{distiller.coolers_library_folder}/{{library}}.{distiller.assembly}.{{filter_name}}.{min(config['bin']['resolutions'])}.mcool",
         view=lambda wildcards: config["rearrange"]["views"][wildcards.library],
     params:
         chunksize=config["rearrange"]["chunksize"],
         new_assembly_name=config["rearrange"]["new_assembly_name"],
+        resolutions=" ".join([str(res) for res in config["bin"]["resolutions"]]),
+        balance_args=config["rearrange"]["balance_args"],
+    threads: 8
     conda:
         "envs/rearrange.yml"
     log:
-        "logs/rearrange/{library}.{filter_name}.{min_resolution}.log",
+        f"logs/rearrange/{{library}}.{{filter_name}}.{min(config['bin']['resolutions'])}.log",
     benchmark:
-        "benchmarks/rearrange/{library}.{filter_name}.{min_resolution}.tsv"
+        f"benchmarks/rearrange/{{library}}.{{filter_name}}.{min(config['bin']['resolutions'])}.tsv"
     output:
-        cool=f"{rearranged_coolers_library_folder}/{{library}}.{config['rearrange']['new_assembly_name']}.{{filter_name}}.{{min_resolution}}.cool",
+        mcool=f"{rearranged_coolers_library_folder}/{{library}}.{config['rearrange']['new_assembly_name']}.{{filter_name}}.{min(config['bin']['resolutions'])}.mcool",
     shell:
         """
-        cooltools rearrange {input.cool} {output.cool} --view {input.view} \
-        --chunksize {params.chunksize} --assembly {params.new_assembly_name}
+        for resolution in {params.resolutions}; do \
+            cooltools rearrange {input.mcool}::resolutions/$resolution \
+            {output.mcool}::resolutions/$resolution --view {input.view} \
+            --chunksize {params.chunksize} --assembly {params.new_assembly_name} \
+            --mode a \
+            >>{log[0]} 2>&1;
+
+            cooler balance {output.mcool}::resolutions/$resolution --force \
+            -p {threads} {params.balance_args} \
+            >>{log[0]} 2>&1;
+        done
         """
 
 
-use rule zoom_library from distiller as zoom_library_rearranged with:
+use rule resgen_upload_library_group from distiller as resgen_upload_library_rearranged with:
     input:
-        cool=f"{rearranged_coolers_library_folder}/{{library}}.{config['rearrange']['new_assembly_name']}.{{filter_name}}.{{min_resolution}}.cool",
+        mcool=rules.rearrange_cooler.output.mcool,
     log:
-        "logs/zoom_library_rearranged/{library}.{filter_name}.{min_resolution}.log",
-    benchmark:
-        "benchmarks/zoom_library_rearranged/{library}.{filter_name}.{min_resolution}.tsv"
+        f"logs/resgen_upload_library_rearranged/{{library}}.{config['rearrange']['new_assembly_name']}.{{filter_name}}.{min(config['bin']['resolutions'])}.log",
     output:
-        mcool=f"{rearranged_coolers_library_folder}/{{library}}.{config['rearrange']['new_assembly_name']}.{{filter_name}}.{{min_resolution}}.mcool",
-
-
-use rule merge_zoom_library_group_coolers from distiller as merge_zoom_library_group_coolers_rearranged with:
-    input:
-        cool=f"{rearranged_coolers_library_group_folder}/{{library_group}}.{config['rearrange']['new_assembly_name']}.{{filter_name}}.{{min_resolution}}.cool",
-    log:
-        "logs/merge_zoom_library_group_coolers_rearranged/{library_group}.{filter_name}.{min_resolution}.log",
-    benchmark:
-        "benchmarks/merge_zoom_library_group_coolers_rearranged/{library_group}.{filter_name}.{min_resolution}.tsv"
-    output:
-        mcool=f"{rearranged_coolers_library_group_folder}/{{library_group}}.{config['rearrange']['new_assembly_name']}.{{filter_name}}.{{min_resolution}}.mcool",
+        touch(
+            f"{rearranged_coolers_library_folder}/{{library}}.{config['rearrange']['new_assembly_name']}.{{filter_name}}.{min(config['bin']['resolutions'])}.mcool_uploaded"
+        ),
