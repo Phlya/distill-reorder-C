@@ -7,6 +7,18 @@ include: "rules/common.smk"
 
 
 LIBRARY_RUN_FASTQS = organize_fastqs(config)
+runs = [list(LIBRARY_RUN_FASTQS[lib].keys()) for lib in LIBRARY_RUN_FASTQS.keys()]
+runs = [item for sublist in runs for item in sublist]
+
+assembly = config["input"]["genome"]["assembly_name"]
+min_resolution = min(config["bin"]["resolutions"])
+
+coolers_library_folder = config["output"]["dirs"]["coolers_library"]
+library_coolers = expand(
+    f"{coolers_library_folder}/{{library}}.{assembly}.{{filter_name}}.{min_resolution}.mcool",
+    library=LIBRARY_RUN_FASTQS.keys(),
+    filter_name=list(config["bin"]["filters"].keys()),
+)
 
 rearranged_coolers_library_folder = config["rearrange"][
     "rearranged_coolers_library_folder"
@@ -26,7 +38,7 @@ rearranged_library_coolers_balanced = expand(
     resolution=config["bin"]["resolutions"],
 )
 resgen_uploads = (
-    [f"{clr}_uploaded" for clr in rearranged_library_coolers]
+    [f"{clr}_uploaded" for clr in library_coolers]
     if config["resgen"]["upload"]
     else []
 )
@@ -37,6 +49,15 @@ rule default:
         rearranged_library_coolers,
         resgen_uploads,
 
+wildcard_constraints:
+    library=f"({'|'.join([re.escape(lib) for lib in LIBRARY_RUN_FASTQS.keys()])})",
+    library_group=(
+        f"({'|'.join([re.escape(lib) for lib in config['input']['library_groups'].keys()])})"
+        if "library_groups" in config["input"]
+        else ""
+    ),
+    run=f"({'|'.join([re.escape(run) for run in runs])})",
+    chunk_id="[0-9]+",
 
 module distiller:
     snakefile:
@@ -47,47 +68,61 @@ module distiller:
 
 use rule * from distiller as distiller_*
 
+new_assembly_name = config["rearrange"]["new_assembly_name"]
 
 rule rearrange_cooler:
     input:
-        mcool=f"{distiller.coolers_library_folder}/{{library}}.{distiller.assembly}.{{filter_name}}.{min(config['bin']['resolutions'])}.mcool",
+        cool=rules.distiller_bin_pairs_library.output.cool,
         view=lambda wildcards: config["rearrange"]["views"][wildcards.library],
     params:
         chunksize=config["rearrange"]["chunksize"],
-        new_assembly_name=config["rearrange"]["new_assembly_name"],
-        resolutions=" ".join([str(res) for res in config["bin"]["resolutions"]]),
-        balance_args=config["rearrange"]["balance_args"],
-    threads: 8
+        new_assembly_name=new_assembly_name,
+    threads: 1
     conda:
         "envs/rearrange.yml"
     log:
-        f"logs/rearrange/{{library}}.{{filter_name}}.{min(config['bin']['resolutions'])}.log",
+        f"logs/rearrange/{{library}}.{{filter_name}}.{{min_resolution}}.log",
     benchmark:
-        f"benchmarks/rearrange/{{library}}.{{filter_name}}.{min(config['bin']['resolutions'])}.tsv"
+        f"benchmarks/rearrange/{{library}}.{{filter_name}}.{{min_resolution}}.tsv"
     output:
-        mcool=f"{rearranged_coolers_library_folder}/{{library}}.{config['rearrange']['new_assembly_name']}.{{filter_name}}.{min(config['bin']['resolutions'])}.mcool",
+        cool=f"{rearranged_coolers_library_folder}/{{library}}.{new_assembly_name}.{{filter_name}}.{{min_resolution}}.cool",
     shell:
         """
-        for resolution in {params.resolutions}; do \
-            cooltools rearrange {input.mcool}::resolutions/$resolution \
-            {output.mcool}::resolutions/$resolution --view {input.view} \
+        cooltools rearrange {input.cool} \
+            {output.cool} --view {input.view} \
             --chunksize {params.chunksize} --assembly {params.new_assembly_name} \
-            --mode a \
-            >>{log[0]} 2>&1;
-
-            cooler balance {output.mcool}::resolutions/$resolution --force \
-            -p {threads} {params.balance_args} \
-            >>{log[0]} 2>&1;
-        done
+            >>{log[0]} 2>&1
         """
+
+rule zoomify_rearranged_cooler:
+    input:
+        cool=f"{rearranged_coolers_library_folder}/{{library}}.{new_assembly_name}.{{filter_name}}.{{min_resolution}}.cool",
+    params:
+        balance_args= lambda wildcards, threads: config["bin"]["balance_options"] + f' --nproc {threads}',
+    threads: 4
+    conda:
+        "envs/rearrange.yml"
+    log:
+        f"logs/zoomify_rearranged/{{library}}.{{filter_name}}.{{min_resolution}}.log",
+    benchmark:
+        f"benchmarks/zoomify_rearranged/{{library}}.{{filter_name}}.{{min_resolution}}.tsv"
+    output:
+        mcool=f"{rearranged_coolers_library_folder}/{{library}}.{new_assembly_name}.{{filter_name}}.{{min_resolution}}.mcool",
+    shell:
+        """
+        cooler zoomify {input.cool} --balance --resolutions 2N \
+        -p {threads} --balance-args '{params.balance_args}' \
+        >>{log[0]} 2>&1
+        """
+    
 
 
 use rule resgen_upload_library_group from distiller as resgen_upload_library_rearranged with:
     input:
-        mcool=rules.rearrange_cooler.output.mcool,
+        mcool=rules.zoomify_rearranged_cooler.output.mcool,
     log:
-        f"logs/resgen_upload_library_rearranged/{{library}}.{config['rearrange']['new_assembly_name']}.{{filter_name}}.{min(config['bin']['resolutions'])}.log",
+        f"logs/resgen_upload_library_rearranged/{{library}}.{new_assembly_name}.{{filter_name}}.{min(config['bin']['resolutions'])}.log",
     output:
         touch(
-            f"{rearranged_coolers_library_folder}/{{library}}.{config['rearrange']['new_assembly_name']}.{{filter_name}}.{min(config['bin']['resolutions'])}.mcool_uploaded"
+            f"{rearranged_coolers_library_folder}/{{library}}.{new_assembly_name}.{{filter_name}}.{min(config['bin']['resolutions'])}.mcool_uploaded"
         ),
