@@ -2,6 +2,14 @@ from snakemake.utils import min_version
 
 min_version("6.0")
 
+module distiller:
+    snakefile:
+        github("open2c/distiller-sm", path="workflow/Snakefile", branch="master")
+    config:
+        config
+
+use rule * from distiller as distiller_*
+
 
 include: "rules/common.smk"
 
@@ -10,15 +18,13 @@ LIBRARY_RUN_FASTQS = organize_fastqs(config)
 runs = [list(LIBRARY_RUN_FASTQS[lib].keys()) for lib in LIBRARY_RUN_FASTQS.keys()]
 runs = [item for sublist in runs for item in sublist]
 
-assembly = config["input"]["genome"]["assembly_name"]
+assembly = distiller.assembly
 min_resolution = min(config["bin"]["resolutions"])
 
-coolers_library_folder = config["output"]["dirs"]["coolers_library"]
-library_coolers = expand(
-    f"{coolers_library_folder}/{{library}}.{assembly}.{{filter_name}}.{min_resolution}.mcool",
-    library=LIBRARY_RUN_FASTQS.keys(),
-    filter_name=list(config["bin"]["filters"].keys()),
-)
+# coolers_library_folder = config["output"]["dirs"]["coolers_library"]
+library_coolers = distiller.library_coolers
+# coolers_library_group_folder = config["output"]["dirs"]["coolers_library_group"]
+library_group_coolers = distiller.library_group_coolers
 
 rearranged_coolers_library_folder = config["rearrange"][
     "rearranged_coolers_library_folder"
@@ -38,7 +44,7 @@ rearranged_library_coolers_balanced = expand(
     resolution=config["bin"]["resolutions"],
 )
 resgen_uploads = (
-    [f"{clr}_uploaded" for clr in library_coolers]
+    [f"{clr}_uploaded" for clr in library_coolers+library_group_coolers]
     if config["resgen"]["upload"]
     else []
 )
@@ -46,6 +52,7 @@ resgen_uploads = (
 
 rule default:
     input:
+        library_coolers,
         rearranged_library_coolers,
         resgen_uploads,
 
@@ -59,14 +66,7 @@ wildcard_constraints:
     run=f"({'|'.join([re.escape(run) for run in runs])})",
     chunk_id="[0-9]+",
 
-module distiller:
-    snakefile:
-        github("open2c/distiller-sm", path="workflow/Snakefile", branch="master")
-    config:
-        config
 
-
-use rule * from distiller as distiller_*
 
 new_assembly_name = config["rearrange"]["new_assembly_name"]
 
@@ -99,7 +99,7 @@ rule zoomify_rearranged_cooler:
         cool=f"{rearranged_coolers_library_folder}/{{library}}.{new_assembly_name}.{{filter_name}}.{{min_resolution}}.cool",
     params:
         balance_args= lambda wildcards, threads: config["bin"]["balance_options"] + f' --nproc {threads}',
-    threads: 4
+    threads: 1
     conda:
         "envs/rearrange.yml"
     log:
@@ -110,7 +110,7 @@ rule zoomify_rearranged_cooler:
         mcool=f"{rearranged_coolers_library_folder}/{{library}}.{new_assembly_name}.{{filter_name}}.{{min_resolution}}.mcool",
     shell:
         """
-        cooler zoomify {input.cool} --balance --resolutions 2N \
+        cooler zoomify {input.cool} --balance --resolutions 1N \
         -p {threads} --balance-args '{params.balance_args}' \
         >>{log[0]} 2>&1
         """

@@ -135,7 +135,7 @@ parse:
     # enables storing MAPQ scores in the .pairsam/.pairs output, which are
     # used later for filtering/binning. The default walks-policy is 'mask'
     # which masks complex walks in long reads.
-    parsing_options: '--add-columns mapq --walks-policy all --report-alignment-end 3'
+    parsing_options: '--add-columns mapq --walks-policy 3unique'
 
 # Control how PCR/optical duplicates are detected in the data.
 dedup:
@@ -180,13 +180,14 @@ bin:
         - 500
         - 200
         - 100
+        - 50
 
 
     # Specify if the multi-resolution .cool output files should be balanced.
     balance: True
 
     # Pass additional parameters to cooler balance:
-    balance_options: '--blacklist config/blacklist.bed --max-iters 1000'
+    balance_options: '--blacklist config/blacklist.bed --max-iters 200 --ignore-dist 1000'
 
     # Specify additional filters applied to pairs during binning.
     # Multiple filters are allowed; for each filter, all pairs satisfying the
